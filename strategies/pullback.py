@@ -125,45 +125,115 @@ class PullbackStrategy(BaseStrategy):
         
         return df
     
-    def scan(self, symbol: str, df: pd.DataFrame) -> Optional[dict]:
+    def scan(self, symbol: str, df: pd.DataFrame, debug: bool = False) -> Optional[dict]:
         """Scan for pullback setup.
         
         Args:
             symbol: Ticker symbol
             df: DataFrame with OHLCV data
+            debug: Enable detailed debug logging
         
         Returns:
             Trade plan if setup found, None otherwise
         """
-        if df.empty or len(df) < 30:
+        if debug:
+            print(f"\n[DEBUG] === PULLBACK SCAN START: {symbol} ===")
+        
+        # Step 1: Validate input data
+        if df.empty:
+            if debug:
+                print(f"[DEBUG] FAILED: DataFrame is empty")
             return None
         
-        # Add indicators
+        if len(df) < 30:
+            if debug:
+                print(f"[DEBUG] FAILED: Insufficient data - {len(df)} bars (need 30+)")
+            return None
+        
+        if debug:
+            print(f"[DEBUG] Step 1 PASSED: Data shape = {df.shape}")
+            print(f"[DEBUG] Date range: {df.index[0]} to {df.index[-1]}")
+            print(f"[DEBUG] Last close: ${df['close'].iloc[-1]:.2f}")
+        
+        # Step 2: Add indicators
         from data import add_technical_indicators
         df = add_technical_indicators(df)
         
-        # Generate signals
+        if debug:
+            print(f"[DEBUG] Step 2 PASSED: Indicators added")
+            last_bar = df.iloc[-1]
+            print(f"[DEBUG] Last bar indicators:")
+            print(f"  - EMA(20): ${last_bar.get('ema_20', 'N/A'):.2f}")
+            print(f"  - Volume: {last_bar.get('volume', 'N/A'):,.0f}")
+            print(f"  - Volume(20): {last_bar.get('volume_20', 'N/A'):,.0f}")
+            print(f"  - ATR(14): {last_bar.get('atr_14', 'N/A'):.2f}")
+            print(f"  - High(20): ${last_bar.get('high_20', 'N/A'):.2f}")
+        
+        # Step 3: Generate signals
         df = self.generate_signals(df)
         
-        # Check for signal on last bar
+        # Count signals found
+        signals_found = (df['signal'] == 1).sum()
+        if debug:
+            print(f"[DEBUG] Step 3 PASSED: Signal generation complete")
+            print(f"[DEBUG] Total signals in data: {signals_found}")
+        
+        # Step 4: Check for signal on last bar
         last_idx = df.index[-1]
-        if df.loc[last_idx, 'signal'] != 1:
+        last_signal = df.loc[last_idx, 'signal']
+        
+        if debug:
+            print(f"[DEBUG] Step 4: Checking last bar signal")
+            print(f"[DEBUG] Last bar signal value: {last_signal}")
+            
+            # Show recent bars and their signals
+            print(f"[DEBUG] Recent 5 bars signals:")
+            for i in range(max(0, len(df)-5), len(df)):
+                bar = df.iloc[i]
+                print(f"  [{df.index[i].date()}] Signal: {bar['signal']}, Close: ${bar['close']:.2f}")
+        
+        if last_signal != 1:
+            if debug:
+                print(f"[DEBUG] FAILED: No signal on last bar (value={last_signal})")
+                # Check why no signal
+                last_bar = df.iloc[-1]
+                print(f"[DEBUG] Checking signal conditions:")
+                if 'is_breakout' in df.columns:
+                    print(f"  - Breakout in history: {df['is_breakout'].iloc[-10:].sum()} (last 10 bars)")
+                if 'near_ema' in df.columns:
+                    print(f"  - Near EMA (last 5): {df['near_ema'].iloc[-5:].sum()}")
+                if 'price_rising' in df.columns:
+                    print(f"  - Price rising: {last_bar.get('price_rising', 'N/A')}")
+                if 'volume_rising' in df.columns:
+                    print(f"  - Volume rising: {last_bar.get('volume_rising', 'N/A')}")
             return None
         
-        # Extract setup details
+        if debug:
+            print(f"[DEBUG] Step 4 PASSED: Signal found on last bar!")
+        
+        # Step 5: Extract setup details
         entry = df.loc[last_idx, 'entry']
         stop = df.loc[last_idx, 'stop']
         target = df.loc[last_idx, 'target']
         
+        if debug:
+            print(f"[DEBUG] Step 5: Extracted values")
+            print(f"  - Entry: {entry}")
+            print(f"  - Stop: {stop}")
+            print(f"  - Target: {target}")
+        
         if pd.isna(entry) or pd.isna(stop) or pd.isna(target):
+            if debug:
+                print(f"[DEBUG] FAILED: NaN values detected")
+                print(f"  - Entry is NaN: {pd.isna(entry)}")
+                print(f"  - Stop is NaN: {pd.isna(stop)}")
+                print(f"  - Target is NaN: {pd.isna(target)}")
             return None
         
-        # Calculate confidence
-        # Higher confidence if:
-        # - Stronger volume on re-break
-        # - Tighter pullback (closer to EMA)
-        # - Stronger uptrend (price well above 50 SMA)
+        if debug:
+            print(f"[DEBUG] Step 5 PASSED: All values valid")
         
+        # Step 6: Calculate confidence
         volume_strength = df.loc[last_idx, 'volume'] / df.loc[last_idx, 'volume_20']
         ema_distance = abs(df.loc[last_idx, 'low'] - df.loc[last_idx, 'ema_20']) / df.loc[last_idx, 'ema_20']
         
@@ -173,7 +243,15 @@ class PullbackStrategy(BaseStrategy):
         
         confidence = (ema_score * 0.4 + volume_score * 0.6)
         
-        return {
+        if debug:
+            print(f"[DEBUG] Step 6: Confidence calculation")
+            print(f"  - Volume strength: {volume_strength:.2f}x")
+            print(f"  - EMA distance: {ema_distance:.2%}")
+            print(f"  - EMA score: {ema_score:.2f}")
+            print(f"  - Volume score: {volume_score:.2f}")
+            print(f"  - Final confidence: {confidence:.2%}")
+        
+        setup = {
             'symbol': symbol,
             'setup': 'breakout_pullback',
             'entry': float(entry),
@@ -187,6 +265,13 @@ class PullbackStrategy(BaseStrategy):
                 f"R:R = 1:{self.target_r}"
             )
         }
+        
+        if debug:
+            print(f"[DEBUG] === PULLBACK SCAN SUCCESS ===")
+            print(f"[DEBUG] Setup: {setup}")
+            print()
+        
+        return setup
     
     def check_exit(
         self,
