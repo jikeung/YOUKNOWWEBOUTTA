@@ -1,0 +1,14 @@
+# Trading & Data
+alpaca-py>=0.30.0
+python-dotenv>=1.0.0
+
+# Data Analysis
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Testing
+pytest>=7.4.0
+
+# Optional: Enhanced CLI display (uncomment if desired)
+# rich>=13.0.0
+
